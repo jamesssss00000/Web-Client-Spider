@@ -5,3 +5,10 @@
    - <a href 有 html 與 pdf
 2. https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10339
    - <a href 有 html 與 jpg
+## 操作範例
+```
+gcc -o crawled crawled.c -lssl -lcrypto
+```
+```
+crawled <start URL> <output directory>
+```
