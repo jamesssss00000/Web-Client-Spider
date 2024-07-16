@@ -7,8 +7,5 @@
    - <a href 有 html 與 jpg
 ## 操作範例
 ```
-gcc -o crawled crawled.c -lssl -lcrypto
-```
-```
 ./crawled <start URL> <output directory>
 ```
