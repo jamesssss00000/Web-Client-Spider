@@ -10,5 +10,5 @@
 gcc -o crawled crawled.c -lssl -lcrypto
 ```
 ```
-crawled <start URL> <output directory>
+./crawled <start URL> <output directory>
 ```
