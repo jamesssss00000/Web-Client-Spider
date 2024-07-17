@@ -115,7 +115,7 @@ int create_socket(const char *hostname, const char *port) {
         }
 
         struct timeval timeout;
-        timeout.tv_sec = 10;
+        timeout.tv_sec = 5;
         timeout.tv_usec = 0;
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
         setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
@@ -227,6 +227,11 @@ int parse_html(const char *html_content, const char *base_url, char *urls[], int
 int read_response(int is_https, SSL *ssl, int sockfd, char **response, size_t *response_len) {
     char buffer[BUFFER_SIZE];
     int bytes, is_chunked = 0;
+    char *chunk_start, *chunk_end;
+    size_t chunk_size;
+
+    *response = NULL;
+    *response_len = 0;
 
     while ((bytes = (is_https ? SSL_read(ssl, buffer, sizeof(buffer)) : recv(sockfd, buffer, sizeof(buffer), 0))) > 0) {
         *response = realloc(*response, *response_len + bytes + 1);
@@ -244,25 +249,47 @@ int read_response(int is_https, SSL *ssl, int sockfd, char **response, size_t *r
 
         if (strstr(*response, "Transfer-Encoding: chunked")) {
             is_chunked = 1;
-            break;
         }
     }
 
     if (is_chunked) {
-        free(*response);
-        *response = NULL;
-        *response_len = 0;
-        while ((bytes = (is_https ? SSL_read(ssl, buffer, sizeof(buffer)) : recv(sockfd, buffer, sizeof(buffer), 0))) > 0) {
-            *response = realloc(*response, *response_len + bytes + 1);
-            if (*response == NULL) {
-                fprintf(stderr, "Memory allocation error\n");
-                if (is_https) SSL_free(ssl);
-                close(sockfd);
-                return ERR_OUT_OF_MEM;
+        printf("Chunked detect\n");
+        char *decoded_response = NULL;
+        size_t decoded_len = 0;
+
+        chunk_start = strstr(*response, "\r\n\r\n");
+        if (chunk_start) {
+            chunk_start += 4;
+
+            while (1) {
+                chunk_size = strtol(chunk_start, &chunk_end, 16);
+                if (chunk_size == 0) {
+                    break;
+                }
+                chunk_end += 2;
+
+                decoded_response = realloc(decoded_response, decoded_len + chunk_size + 1);
+                if (decoded_response == NULL) {
+                    fprintf(stderr, "Memory allocation error\n");
+                    if (is_https) {
+                        SSL_free(ssl);
+                    }
+                    close(sockfd);
+                    free(*response);
+                    return ERR_OUT_OF_MEM;
+                }
+
+                memcpy(decoded_response + decoded_len, chunk_end, chunk_size);
+                decoded_len += chunk_size;
+                chunk_end += chunk_size + 2;
+
+                chunk_start = chunk_end;
             }
-            memcpy(*response + *response_len, buffer, bytes);
-            *response_len += bytes;
-            (*response)[*response_len] = '\0';
+            decoded_response[decoded_len] = '\0';
+
+            free(*response);
+            *response = decoded_response;
+            *response_len = decoded_len;
         }
     }
 
@@ -371,6 +398,7 @@ char *fetch_url(const char *url, SSL_CTX *ctx, int depth, char **final_url, int 
     }
 
     *final_url = strdup(url);
+
     return response;
 }
 
