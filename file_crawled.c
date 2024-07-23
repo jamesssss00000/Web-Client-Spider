@@ -32,7 +32,7 @@
 #define ERR_MAX_DEPTH       ERR_BASE-15
 #define ERR_SSL_CONNECT     ERR_BASE-16
 
-#define MAX_URLS 1000
+#define MAX_URLS 10000
 #define BUFFER_SIZE 4096
 #define HOST_SIZE 256
 #define PATH_SIZE 256
@@ -41,21 +41,25 @@
 #define REQUEST_SIZE 512
 #define MAX_DEPTH 2
 
-char *crawled_urls[MAX_URLS];
-int crawled_count = 0;
+typedef struct {
+    char *crawled_urls[MAX_URLS];
+    int crawled_count;
+} CrawledData;
+
 char *output_dir;
 
-
-int already_crawled(const char *url) {
-
-    for (int i = 0; i < crawled_count; i++) {
-        if (strcmp(crawled_urls[i], url) == 0) {
+int already_crawled(CrawledData *crawled_data, const char *url) {
+    for (int i = 0; i < crawled_data->crawled_count; i++) {
+        if (strcmp(crawled_data->crawled_urls[i], url) == 0) {
             return ERR_ALREADY_CRAWLED;
         }
     }
-    if (crawled_count < MAX_URLS) {
-        crawled_urls[crawled_count] = strdup(url);
-        crawled_count++;
+    if (crawled_data->crawled_count < MAX_URLS) {
+        crawled_data->crawled_urls[crawled_data->crawled_count] = strdup(url);
+        if (crawled_data->crawled_urls[crawled_data->crawled_count] == NULL) {
+            return ERR_OUT_OF_MEM;
+        }
+        crawled_data->crawled_count++;
         return SUCCESS;
     }
 
@@ -146,7 +150,7 @@ int create_socket(const char *hostname, const char *port) {
     return ret_code == SUCCESS ? sockfd : ret_code;
 }
 
-int parse_html(const char *html_content, const char *base_url, char *urls[], int *url_count) {
+int parse_html(const char *html_content, const char *base_url, CrawledData *crawled_data) {
     const char *a_tag_start = "<a href=";
     const char *pos = html_content;
 
@@ -168,7 +172,7 @@ int parse_html(const char *html_content, const char *base_url, char *urls[], int
         }
     }
 
-    while ((pos = strstr(pos, a_tag_start)) != NULL && *url_count < MAX_URLS) {
+    while ((pos = strstr(pos, a_tag_start)) != NULL && crawled_data->crawled_count < MAX_URLS) {
         pos = strstr(pos, a_tag_start);
         if (pos == NULL) {
             break;
@@ -206,7 +210,7 @@ int parse_html(const char *html_content, const char *base_url, char *urls[], int
         }
 
         printf("Found link: %s\n", full_url);
-        urls[(*url_count)++] = full_url;
+        crawled_data->crawled_urls[crawled_data->crawled_count++] = full_url;
 
         free(href);
         pos = end + 1;
@@ -215,7 +219,7 @@ int parse_html(const char *html_content, const char *base_url, char *urls[], int
     return SUCCESS;
 }
 
-int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char *temp, char **url_type) {
+int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char *temp, char **url_type, CrawledData *crawled_data) {
     char buffer[BUFFER_SIZE];
     int bytes_read = 0, is_chunked = 0, is_html = 0;
     FILE *file = NULL;
@@ -244,6 +248,10 @@ int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char
         memset(temp, 0, BUFFER_SIZE);
     } else if (status_code == -1) {
         printf("HTTP Status Code: 200\n");
+        if (already_crawled(crawled_data, url) != 0) {
+            printf("URL already crawled: %s\n", url);
+            return ERR_ALREADY_CRAWLED;
+        }
         memset(temp, 0, BUFFER_SIZE);
     } else {
         printf("HTTP Status Code: %d\n", status_code);
@@ -261,10 +269,13 @@ int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char
         *url_type = "html";
     } else if (strstr(buffer, "\r\nContent-Type: image/jpeg")) {
         file_type = ".jpg";
+        *url_type = "jpg";
     } else if (strstr(buffer, "\r\nContent-Type: application/pdf")) {
         file_type = ".pdf";
+        *url_type = "pdf";
     } else {
         file_type = NULL;
+        *url_type = "unknown";
     }
     
     printf("%s\n", file_type);
@@ -436,7 +447,7 @@ int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char
     return SUCCESS;
 }
 
-int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, char **url_type) {
+int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, char **url_type, CrawledData *crawled_data) {
     if (count > 5) {
         fprintf(stderr, "Max depth reached\n");
         return ERR_MAX_DEPTH;
@@ -487,11 +498,11 @@ int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, c
         }
         
         SSL_write(ssl, request, strlen(request));
-        result = read_response(1, ssl, sockfd, url, depth, temp, url_type);
+        result = read_response(1, ssl, sockfd, url, depth, temp, url_type, crawled_data);
         SSL_free(ssl);
     } else {
         send(sockfd, request, strlen(request), 0);
-        result = read_response(0, NULL, sockfd, url, depth, temp, url_type);
+        result = read_response(0, NULL, sockfd, url, depth, temp, url_type, crawled_data);
     }
 
     close(sockfd);
@@ -517,7 +528,7 @@ int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, c
                     redirect_url = strdup(new_location);
                 }
                 printf("Redirecting to: %s\n", redirect_url);
-                fetch_url(redirect_url, ctx, depth, count + 1, final_url, url_type);
+                fetch_url(redirect_url, ctx, depth, count + 1, final_url, url_type, crawled_data);
                 free(redirect_url);
                 free(new_location);
                 return result;
@@ -532,20 +543,13 @@ int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, c
     return SUCCESS;
 }
 
-int fetch_and_parse(char *url, int depth, SSL_CTX *ctx) {
-    if (already_crawled(url) != 0) {
-        printf("URL already crawled: %s\n", url);
-        return ERR_ALREADY_CRAWLED;
-    }
-
+int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_data) {
     printf("Connecting to %s...\n", url);
     int count = 0;
     char *final_url, *url_type;
-    fetch_url(url, ctx, depth, count, &final_url, &url_type);
-    printf("final_url = %s\n", final_url);
+    fetch_url(url, ctx, depth, count, &final_url, &url_type, crawled_data);
 
     if (strcmp(url_type, "html") == 0 && depth < MAX_DEPTH) {
-
         char *read_filename = sanitize_filename(url);
         if (read_filename == NULL) {
             fprintf(stderr, "Filename sanitization failed\n");
@@ -576,15 +580,13 @@ int fetch_and_parse(char *url, int depth, SSL_CTX *ctx) {
         fread(response, 1, file_size, file);
         response[file_size] = '\0';
 
-        char *urls[MAX_URLS];
-        int url_count = 0;
-        parse_html(response, url, urls, &url_count);
+        parse_html(response, url, crawled_data);
 
         free(response);
         fclose(file);
-        for (int i = 0; i < url_count; i++) {
-            fetch_and_parse(urls[i], depth + 1, ctx);
-            free(urls[i]);
+        for (int i = 0; i < crawled_data->crawled_count; i++) {
+            fetch_and_parse(crawled_data->crawled_urls[i], depth + 1, ctx, crawled_data);
+            //free(crawled_data->crawled_urls[i]);
         }
     }
 
@@ -604,6 +606,7 @@ int main(int argc, char *argv[]) {
 
     char *start_url = argv[1];
     output_dir = argv[2];
+    CrawledData crawled_data = {.crawled_count = 0};
 
     SSL_CTX *ctx = create_ssl_context();
     if (!ctx) {
@@ -612,9 +615,10 @@ int main(int argc, char *argv[]) {
     }
 
     create_directory(output_dir);
-    fetch_and_parse(start_url, 1, ctx);
+    fetch_and_parse(start_url, 1, ctx, &crawled_data);
 
     SSL_CTX_free(ctx);
     EVP_cleanup();
+
     return SUCCESS;
 }
