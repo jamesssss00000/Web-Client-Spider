@@ -42,6 +42,17 @@
 #define REQUEST_SIZE 512
 #define MAX_DEPTH 2
 
+//function
+int already_crawled(CrawledData *crawled_data, const char *url);
+int create_directory(const char *dir_name);
+char *sanitize_filename(const char *url);
+int create_socket(const char *hostname, const char *port);
+int parse_html(const char *html_content, const char *base_url, CrawledData *crawled_data);
+int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char *temp, char **url_type, CrawledData *crawled_data);
+int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, char **url_type, CrawledData *crawled_data);
+int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_data);
+
+
 typedef struct {
     char *crawled_urls[MAX_URLS];
     int crawled_count;
@@ -595,11 +606,12 @@ int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_dat
 }
 
 int main(int argc, char *argv[]) {
+    
     // Test url = "https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10335"
     // Test url = "https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10334"
     // Test url = "https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10339"
-    // Test url = "https://www.nthu.edu.tw/"
     // Test url = "https://www.ccu.edu.tw/"
+    
     if (argc != 3) {
         fprintf(stderr, "Usage: %s <start URL> <output directory>\n", argv[0]);
         return ERR_OF_ARGS;
