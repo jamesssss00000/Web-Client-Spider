@@ -31,6 +31,7 @@
 #define ERR_READ_RESPONSE   ERR_BASE-14
 #define ERR_MAX_DEPTH       ERR_BASE-15
 #define ERR_SSL_CONNECT     ERR_BASE-16
+#define ERR_MAX_URLS        ERR_BASE-17
 
 #define MAX_URLS 10000
 #define BUFFER_SIZE 4096
@@ -61,6 +62,9 @@ int already_crawled(CrawledData *crawled_data, const char *url) {
         }
         crawled_data->crawled_count++;
         return SUCCESS;
+    } else {
+        fprintf(stderr, "Maximum number of URLs exceeded.\n");
+        return ERR_MAX_URLS;
     }
 
     return ERR_ALREADY_CRAWLED;
@@ -278,8 +282,6 @@ int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char
         *url_type = "unknown";
     }
     
-    printf("%s\n", file_type);
-
     if (is_html) {
         response = malloc(sizeof(char) * (bytes_read + 1));
         if (response == NULL) {
@@ -527,7 +529,7 @@ int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, c
                 } else {
                     redirect_url = strdup(new_location);
                 }
-                printf("Redirecting to: %s\n", redirect_url);
+                //printf("Redirecting to: %s\n", redirect_url);
                 fetch_url(redirect_url, ctx, depth, count + 1, final_url, url_type, crawled_data);
                 free(redirect_url);
                 free(new_location);
@@ -586,7 +588,6 @@ int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_dat
         fclose(file);
         for (int i = 0; i < crawled_data->crawled_count; i++) {
             fetch_and_parse(crawled_data->crawled_urls[i], depth + 1, ctx, crawled_data);
-            //free(crawled_data->crawled_urls[i]);
         }
     }
 
@@ -619,6 +620,5 @@ int main(int argc, char *argv[]) {
 
     SSL_CTX_free(ctx);
     EVP_cleanup();
-
     return SUCCESS;
 }
