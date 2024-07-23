@@ -28,19 +28,23 @@
 #define ERR_FIND_HEAD       ERR_BASE-11
 #define ERR_FILE_TYPE       ERR_BASE-12
 #define ERR_HTTP_STATUS     ERR_BASE-13
+#define ERR_READ_RESPONSE   ERR_BASE-14
+#define ERR_MAX_DEPTH       ERR_BASE-15
+#define ERR_SSL_CONNECT     ERR_BASE-16
 
 #define MAX_URLS 1000
-#define OUTPUT_DIR "crawled_pages1"
 #define BUFFER_SIZE 4096
 #define HOST_SIZE 256
 #define PATH_SIZE 256
 #define PORT_SIZE 10
 #define FILE_PATH 1000
 #define REQUEST_SIZE 512
-#define MAX_DEPTH 1
+#define MAX_DEPTH 2
 
 char *crawled_urls[MAX_URLS];
 int crawled_count = 0;
+char *output_dir;
+
 
 int already_crawled(const char *url) {
 
@@ -211,7 +215,7 @@ int parse_html(const char *html_content, const char *base_url, char *urls[], int
     return SUCCESS;
 }
 
-int read_response(int is_https, SSL *ssl, int sockfd, const char *url, int depth, char *temp) {
+int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char *temp, char **url_type) {
     char buffer[BUFFER_SIZE];
     int bytes_read = 0, is_chunked = 0, is_html = 0;
     FILE *file = NULL;
@@ -247,8 +251,6 @@ int read_response(int is_https, SSL *ssl, int sockfd, const char *url, int depth
         memset(temp, 0, BUFFER_SIZE);
     }
 
-    printf("%d\n", status_code);
-
     if (strstr(buffer, "\r\nTransfer-Encoding: chunked")) {
         is_chunked = 1;
     }
@@ -256,6 +258,7 @@ int read_response(int is_https, SSL *ssl, int sockfd, const char *url, int depth
     if (strstr(buffer, "\r\nContent-Type: text/html")) {
         is_html = 1;
         file_type = ".html";
+        *url_type = "html";
     } else if (strstr(buffer, "\r\nContent-Type: image/jpeg")) {
         file_type = ".jpg";
     } else if (strstr(buffer, "\r\nContent-Type: application/pdf")) {
@@ -281,7 +284,8 @@ int read_response(int is_https, SSL *ssl, int sockfd, const char *url, int depth
         response_len += bytes_read;
         response[response_len] = '\0';
 
-        while ((bytes_read = (is_https ? SSL_read(ssl, buffer, sizeof(buffer)) : recv(sockfd, buffer, sizeof(buffer), 0))) > 0) {
+        while ((bytes_read = (is_https ? SSL_read(ssl, buffer, sizeof(buffer)) 
+                                    : recv(sockfd, buffer, sizeof(buffer), 0))) > 0) {
             response = realloc(response, response_len + bytes_read + 1);
             if (response == NULL) {
                 fprintf(stderr, "Memory allocation error\n");
@@ -304,7 +308,6 @@ int read_response(int is_https, SSL *ssl, int sockfd, const char *url, int depth
             chunk_start = strstr(response, "\r\n\r\n");
             if (chunk_start) {
                 chunk_start += 4;
-
                 while (1) {
                     chunk_size = strtol(chunk_start, &chunk_end, 16);
                     if (chunk_size == 0) {
@@ -352,9 +355,9 @@ int read_response(int is_https, SSL *ssl, int sockfd, const char *url, int depth
             *body_end = '\0';
         }
         
-        char filename[BUFFER_SIZE];
+        char filename[FILE_PATH];
         char *save_filename = sanitize_filename(url);
-        snprintf(filename, sizeof(filename), "%s/depth_%d_%s%s", OUTPUT_DIR, depth, save_filename, file_type);
+        snprintf(filename, sizeof(filename), "%s/depth_%d_%s%s", output_dir, depth, save_filename, file_type);
         free(save_filename);
         FILE *fp = fopen(filename, "wb");
         if (fp) {
@@ -372,7 +375,7 @@ int read_response(int is_https, SSL *ssl, int sockfd, const char *url, int depth
         header_end += 4;
         char *filename = sanitize_filename(url);
         char filepath[FILE_PATH];
-        snprintf(filepath, sizeof(filepath), "%s/depth_%d_%s%s", OUTPUT_DIR, depth, filename, file_type);
+        snprintf(filepath, sizeof(filepath), "%s/depth_%d_%s%s", output_dir, depth, filename, file_type);
         free(filename);
 
         FILE *fp = fopen(filepath, "wb");
@@ -382,15 +385,49 @@ int read_response(int is_https, SSL *ssl, int sockfd, const char *url, int depth
         }
 
         size_t header_size = bytes_read - (header_end - buffer);
+        
+        if (is_chunked) {
+            char *chunk_start = header_end;
+            while (1) {
+                char *chunk_end;
+                size_t chunk_size = strtoul(chunk_start, &chunk_end, 16);
+                if (chunk_size == 0) {
+                    break;
+                }
 
-        fwrite(header_end, 1, header_size, fp);
+                chunk_end += 2;
 
-        while ((bytes_read = (is_https ? SSL_read(ssl, buffer, sizeof(buffer)) : recv(sockfd, buffer, sizeof(buffer), 0))) > 0) {
-            fwrite(buffer, 1, bytes_read, fp);
-        } 
-        fclose(fp);
-        printf("File saved to %s\n", filepath);
+                // check if more data needs to be read
+                while ((chunk_end + chunk_size + 2) > (buffer + bytes_read)) {
+                    size_t remaining_data = buffer + bytes_read - chunk_start;
+                    memmove(buffer, chunk_start, remaining_data);
+                    bytes_read = remaining_data;
+                    chunk_start = buffer;
+                    chunk_end = buffer + (chunk_end - chunk_start);
 
+                    int new_bytes = (is_https ? SSL_read(ssl, buffer + bytes_read, sizeof(buffer) - bytes_read) 
+                                            : recv(sockfd, buffer + bytes_read, sizeof(buffer) - bytes_read, 0));
+                    if (new_bytes <= 0) {
+                        fprintf(stderr, "Error reading chunked data\n");
+                        fclose(fp);
+                        return ERR_READ_RESPONSE;
+                    }
+                    bytes_read += new_bytes;
+                }
+
+                fwrite(chunk_end, 1, chunk_size, fp);
+                chunk_start = chunk_end + chunk_size + 2;
+            }
+        } else {
+            fwrite(header_end, 1, header_size, fp);
+
+            while ((bytes_read = (is_https ? SSL_read(ssl, buffer, sizeof(buffer)) 
+                                        : recv(sockfd, buffer, sizeof(buffer), 0))) > 0) {
+                fwrite(buffer, 1, bytes_read, fp);
+            } 
+            fclose(fp);
+            printf("File saved to %s\n", filepath);
+        }
     } else {
             fprintf(stderr, "Undefine file type.\n");
             return ERR_FILE_TYPE;
@@ -399,10 +436,10 @@ int read_response(int is_https, SSL *ssl, int sockfd, const char *url, int depth
     return SUCCESS;
 }
 
-char *fetch_url(const char *url, SSL_CTX *ctx, int depth, char **final_url, int count) {
+int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, char **url_type) {
     if (count > 5) {
         fprintf(stderr, "Max depth reached\n");
-        return NULL;
+        return ERR_MAX_DEPTH;
     }
 
     char hostname[HOST_SIZE] = "";
@@ -416,18 +453,16 @@ char *fetch_url(const char *url, SSL_CTX *ctx, int depth, char **final_url, int 
         is_https = 1;
     } else {
         fprintf(stderr, "Invalid URL scheme\n");
-        return NULL;
+        return ERR_FETCH_URL;
     }
 
     is_https == 0 ? strcpy(port, "80") : strcpy(port, "443");
     if (strlen(path) == 0) strcpy(path, "/");
     int sockfd = create_socket(hostname, port);
     if (sockfd < 0) {
-        return NULL;
+        return ERR_SOCKET;
     }
 
-    char *response = NULL;
-    size_t response_len = 0;
     char *new_location = NULL;
     char buffer[BUFFER_SIZE], temp[BUFFER_SIZE];
     int bytes;
@@ -437,7 +472,7 @@ char *fetch_url(const char *url, SSL_CTX *ctx, int depth, char **final_url, int 
     snprintf(request, sizeof(request),
             "GET /%s HTTP/1.1\r\n"
             "Host: %s\r\n"
-            "User-Agent: curl/7.64.1\r\n"
+            "User-Agent: Mozilla/7.64.1\r\n"
             "Connection: close\r\n\r\n", path, hostname);
 
     if (is_https) {
@@ -448,18 +483,19 @@ char *fetch_url(const char *url, SSL_CTX *ctx, int depth, char **final_url, int 
             ERR_print_errors_fp(stderr);
             SSL_free(ssl);
             close(sockfd);
-            return NULL;
+            return ERR_SSL_CONNECT;
         }
         
         SSL_write(ssl, request, strlen(request));
-        result = read_response(1, ssl, sockfd, url, depth, temp);
+        result = read_response(1, ssl, sockfd, url, depth, temp, url_type);
         SSL_free(ssl);
     } else {
         send(sockfd, request, strlen(request), 0);
-        result = read_response(0, NULL, sockfd, url, depth, temp);
+        result = read_response(0, NULL, sockfd, url, depth, temp, url_type);
     }
 
     close(sockfd);
+
     if (result == ERR_FETCH_URL) {
         char *location = strstr(temp, "Location: ");
         if (location) {
@@ -481,21 +517,22 @@ char *fetch_url(const char *url, SSL_CTX *ctx, int depth, char **final_url, int 
                     redirect_url = strdup(new_location);
                 }
                 printf("Redirecting to: %s\n", redirect_url);
-                char *redirect_response = fetch_url(redirect_url, ctx, depth, final_url, count + 1);
+                fetch_url(redirect_url, ctx, depth, count + 1, final_url, url_type);
                 free(redirect_url);
                 free(new_location);
-                return redirect_response;
+                return result;
             }
         }
     }
 
-    *final_url = strdup(url);
+    if (result == SUCCESS) {
+        *final_url = strdup(url);
+    }
 
     return SUCCESS;
 }
 
 int fetch_and_parse(char *url, int depth, SSL_CTX *ctx) {
-
     if (already_crawled(url) != 0) {
         printf("URL already crawled: %s\n", url);
         return ERR_ALREADY_CRAWLED;
@@ -503,11 +540,52 @@ int fetch_and_parse(char *url, int depth, SSL_CTX *ctx) {
 
     printf("Connecting to %s...\n", url);
     int count = 0;
-    char *final_url = NULL;
-    fetch_url(url, ctx, depth, &final_url, count);
-    
-    if (strcmp(url, final_url) != 0) {
-        url = strdup(final_url);
+    char *final_url, *url_type;
+    fetch_url(url, ctx, depth, count, &final_url, &url_type);
+    printf("final_url = %s\n", final_url);
+
+    if (strcmp(url_type, "html") == 0 && depth < MAX_DEPTH) {
+
+        char *read_filename = sanitize_filename(url);
+        if (read_filename == NULL) {
+            fprintf(stderr, "Filename sanitization failed\n");
+            return ERR_OUT_OF_MEM;
+        }
+
+        char filepath[FILE_PATH];
+        snprintf(filepath, sizeof(filepath), "%s/depth_%d_%s.html", output_dir, depth, read_filename);
+        free(read_filename);
+
+        FILE *file = fopen(filepath, "r");
+        if (!file) {
+            fprintf(stderr, "Error opening file: %s\n", filepath);
+            return ERR_OPEN_FILE;
+        }
+
+        fseek(file, 0, SEEK_END);
+        long file_size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+
+        char *response = malloc(file_size + 1);
+        if (!response) {
+            fprintf(stderr, "Error allocating memory\n");
+            fclose(file);
+            return ERR_OUT_OF_MEM;
+        }
+
+        fread(response, 1, file_size, file);
+        response[file_size] = '\0';
+
+        char *urls[MAX_URLS];
+        int url_count = 0;
+        parse_html(response, url, urls, &url_count);
+
+        free(response);
+        fclose(file);
+        for (int i = 0; i < url_count; i++) {
+            fetch_and_parse(urls[i], depth + 1, ctx);
+            free(urls[i]);
+        }
     }
 
     return SUCCESS;
@@ -517,13 +595,15 @@ int main(int argc, char *argv[]) {
     // Test url = "https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10335"
     // Test url = "https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10334"
     // Test url = "https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10339"
+    // Test url = "https://www.nthu.edu.tw/"
+    // Test url = "https://www.ccu.edu.tw/"
     if (argc != 3) {
         fprintf(stderr, "Usage: %s <start URL> <output directory>\n", argv[0]);
         return ERR_OF_ARGS;
     }
 
     char *start_url = argv[1];
-    const char *output_dir = argv[2];
+    output_dir = argv[2];
 
     SSL_CTX *ctx = create_ssl_context();
     if (!ctx) {
