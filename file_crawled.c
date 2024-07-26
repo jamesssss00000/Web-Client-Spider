@@ -42,6 +42,12 @@
 #define REQUEST_SIZE 512
 #define MAX_DEPTH 2
 
+typedef struct {
+    char *crawled_urls[MAX_URLS];
+    int crawled_count;
+} CrawledData;
+
+
 //function
 int already_crawled(CrawledData *crawled_data, const char *url);
 int create_directory(const char *dir_name);
@@ -52,11 +58,6 @@ int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char
 int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, char **url_type, CrawledData *crawled_data);
 int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_data);
 
-
-typedef struct {
-    char *crawled_urls[MAX_URLS];
-    int crawled_count;
-} CrawledData;
 
 char *output_dir;
 
