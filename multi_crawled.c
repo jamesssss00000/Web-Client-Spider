@@ -17,33 +17,62 @@
 #include <fcntl.h>
 #include <semaphore.h>
 
+// #define SUCCESS  0
+// #define ERR_BASE 0
+// #define ALL_CRAWLED 1
+// #define ERR_READ_WEB        ERR_BASE-1
+// #define ERR_ALREADY_CRAWLED ERR_BASE-2
+// #define ERR_CREATE_DIR      ERR_BASE-3
+// #define ERR_GETADDRIFO      ERR_BASE-4
+// #define ERR_SOCKET          ERR_BASE-5
+// #define ERR_CONNECT         ERR_BASE-6
+// #define ERR_OF_ARGS         ERR_BASE-7
+// #define ERR_OUT_OF_MEM      ERR_BASE-8
+// #define ERR_FETCH_URL       ERR_BASE-9
+// #define ERR_OPEN_FILE       ERR_BASE-10
+// #define ERR_FIND_HEAD       ERR_BASE-11
+// #define ERR_FILE_TYPE       ERR_BASE-12
+// #define ERR_HTTP_STATUS     ERR_BASE-13
+// #define ERR_READ_RESPONSE   ERR_BASE-14
+// #define ERR_MAX_DEPTH       ERR_BASE-15
+// #define ERR_SSL_CONNECT     ERR_BASE-16
+// #define ERR_MAX_URLS        ERR_BASE-17
+// #define ERR_CRAWLING        ERR_BASE-18
+// #define ERR_SEM_OPEN        ERR_BASE-19
+// #define ERR_CREATE_FORK     ERR_BASE-20
+// #define ERR_URL_TOO_LONG    ERR_BASE-21
+
 #define SUCCESS  0
 #define ERR_BASE 0
-#define ERR_READ_WEB        ERR_BASE-1
-#define ERR_ALREADY_CRAWLED ERR_BASE-2
-#define ERR_CREATE_DIR      ERR_BASE-3
-#define ERR_GETADDRIFO      ERR_BASE-4
-#define ERR_SOCKET          ERR_BASE-5
-#define ERR_CONNECT         ERR_BASE-6
-#define ERR_OF_ARGS         ERR_BASE-7
-#define ERR_OUT_OF_MEM      ERR_BASE-8
-#define ERR_FETCH_URL       ERR_BASE-9
-#define ERR_OPEN_FILE       ERR_BASE-10
-#define ERR_FIND_HEAD       ERR_BASE-11
-#define ERR_FILE_TYPE       ERR_BASE-12
-#define ERR_HTTP_STATUS     ERR_BASE-13
-#define ERR_READ_RESPONSE   ERR_BASE-14
-#define ERR_MAX_DEPTH       ERR_BASE-15
-#define ERR_SSL_CONNECT     ERR_BASE-16
-#define ERR_MAX_URLS        ERR_BASE-17
-#define ERR_CRAWLING        ERR_BASE-18
-#define ERR_SEM_OPEN        ERR_BASE-19
-#define ERR_CREATE_FORK     ERR_BASE-20
+#define ERR_URL_TOO_LONG            ERR_BASE-1
+#define ERR_MAX_URLS                ERR_BASE-2
+#define ERR_ALREADY_CRAWLED         ERR_BASE-3
+#define ERR_CREATE_DIR              ERR_BASE-4
+#define ERR_GETADDRIFO              ERR_BASE-5
+#define ERR_SOCKET                  ERR_BASE-6
+#define ERR_CONNECT                 ERR_BASE-7
+#define ERR_READ_WEB                ERR_BASE-8
+#define ERR_HTTP_STATUS             ERR_BASE-9
+#define ERR_OUT_OF_MEM              ERR_BASE-10
+#define ERR_FIND_HEAD               ERR_BASE-11
+#define ERR_OPEN_FILE               ERR_BASE-12
+#define ERR_READ_RESPONSE           ERR_BASE-13
+#define ERR_FILE_TYPE               ERR_BASE-14
+#define ERR_MAX_DEPTH               ERR_BASE-15
+#define ERR_FETCH_URL               ERR_BASE-16
+#define ERR_SSL_CONNECT             ERR_BASE-17
+#define ERR_OF_ARGS                 ERR_BASE-18
+#define ERR_OPEN_SHARED_MEMORY      ERR_BASE-19
+#define ERR_RESIZE_SHARED_MEMORY    ERR_BASE-20
+#define ERR_MAP_SHARED_MEMORY       ERR_BASE-21
+#define ERR_SEM_OPEN                ERR_BASE-22
+#define ERR_CREATE_FORK             ERR_BASE-23
 
 #define MAX_URLS 10000
+#define MAX_URL_LENGTH 1024
 #define BUFFER_SIZE 4096
-#define HOST_SIZE 256
-#define PATH_SIZE 256
+#define HOST_SIZE 1024
+#define PATH_SIZE 1024
 #define PORT_SIZE 10
 #define FILE_PATH 1000
 #define REQUEST_SIZE 512
@@ -53,27 +82,24 @@
 #define SEM_NAME "/crawler_sem"
 
 typedef struct {
-    char *crawled_urls[MAX_URLS];
+    char crawled_urls[MAX_URLS][MAX_URL_LENGTH];
     int crawled_count;
-    int status[MAX_URLS]; // 0: uncrawl, 1: can_crawl 2: crawling, 3: crawled
+    int status[MAX_URLS]; // 0: not_crawled, 1: can_crawl 2: crawling, 3: crawled
+    int depth[MAX_URLS];
 } CrawledData;
 
+CrawledData *crawled_data;
 char *output_dir;
+sem_t *sem;
 
-//function
-int already_crawled(CrawledData *crawled_data, const char *url, sem_t *sem);
-int create_directory(const char *dir_name);
-char *sanitize_filename(const char *url);
-int create_socket(const char *hostname, const char *port);
-int parse_html(const char *html_content, const char *base_url, CrawledData *crawled_data, sem_t *sem);
-int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char *temp, char **url_type, CrawledData *crawled_data);
-int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, char **url_type, CrawledData *crawled_data);
-int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_data, sem_t *sem);
+int already_crawled(CrawledData *crawled_data, int depth, const char *url, sem_t *sem) {
+    if (strlen(url) >= MAX_URL_LENGTH) {
+        fprintf(stderr, "URL exceeds the maximum allowed length.\n");
+        return ERR_URL_TOO_LONG;
+    }
 
-int already_crawled(CrawledData *crawled_data, const char *url, sem_t *sem) {
     sem_wait(sem);
     for (int i = 0; i < crawled_data->crawled_count; i++) {
-        printf("Checking URL: %s\n", crawled_data->crawled_urls[i]);
         if (strcmp(crawled_data->crawled_urls[i], url) == 0) {
             sem_post(sem);
             return crawled_data->status[i];
@@ -81,9 +107,10 @@ int already_crawled(CrawledData *crawled_data, const char *url, sem_t *sem) {
     }
 
     if (crawled_data->crawled_count < MAX_URLS) {
-        crawled_data->crawled_urls[crawled_data->crawled_count] = strdup(url);
         printf("Adding URL: %s\n", url);
-        crawled_data->status[crawled_data->crawled_count] = 1;
+        strcpy(crawled_data->crawled_urls[crawled_data->crawled_count], url);
+        crawled_data->status[crawled_data->crawled_count] = 0;
+        crawled_data->depth[crawled_data->crawled_count] = depth + 1;
         crawled_data->crawled_count++;
         sem_post(sem);
         return SUCCESS;
@@ -95,7 +122,6 @@ int already_crawled(CrawledData *crawled_data, const char *url, sem_t *sem) {
 
     return ERR_ALREADY_CRAWLED;
 }
-
 
 int create_directory(const char *dir_name) {
     struct stat st = {0};
@@ -181,7 +207,7 @@ int create_socket(const char *hostname, const char *port) {
     return ret_code == SUCCESS ? sockfd : ret_code;
 }
 
-int parse_html(const char *html_content, const char *base_url, CrawledData *crawled_data, sem_t *sem) {
+int parse_html(const char *html_content, int depth, const char *base_url, CrawledData *crawled_data, sem_t *sem) {
     const char *a_tag_start = "<a href=";
     const char *pos = html_content;
 
@@ -240,23 +266,10 @@ int parse_html(const char *html_content, const char *base_url, CrawledData *craw
             sprintf(full_url, "https://%s/%s/%s", hostname, path, href);
         }
 
-        int is_crawled = 0;
-        for (int i = 0; i < crawled_data->crawled_count; i++) {
-            if (strcmp(crawled_data->crawled_urls[i], full_url) == 0) {
-                is_crawled = 1;
-                break;
-            }
-        }
-        
-        sem_wait(sem);
-        if (is_crawled == 0) {
-            printf("Found link: %s\n", full_url);
-            crawled_data->crawled_urls[crawled_data->crawled_count] = full_url;
-            crawled_data->status[crawled_data->crawled_count] = 0;
-            crawled_data->crawled_count++;
-        }
-        sem_post(sem);
+        already_crawled(crawled_data, depth, full_url, sem);
+
         free(href);
+        free(full_url);
         pos = end + 1;
     }
 
@@ -350,7 +363,6 @@ int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char
         }
 
         if (is_chunked) {
-            //printf("Chunked detect\n");
             char *decoded_response = NULL;
             size_t decoded_len = 0;
 
@@ -408,12 +420,14 @@ int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char
         char *save_filename = sanitize_filename(url);
         snprintf(filename, sizeof(filename), "%s/depth_%d_%s%s", output_dir, depth, save_filename, file_type);
         free(save_filename);
+
         FILE *fp = fopen(filename, "wb");
         if (fp) {
             fwrite(body_start, 1, strlen(body_start), fp);
             fclose(fp);
             printf("Response saved to %s\n", filename);
         }
+
         free(response);  
     } else if (strcmp(file_type, ".jpg") == 0 || strcmp(file_type, ".pdf") == 0) {
         char *header_end = strstr(buffer, "\r\n\r\n");
@@ -481,12 +495,12 @@ int read_response(int is_https, SSL *ssl, int sockfd, char *url, int depth, char
             fprintf(stderr, "Undefine file type.\n");
             return ERR_FILE_TYPE;
     }
-    printf("ok\n");
+
     return SUCCESS;
 }
 
 int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, char **url_type, CrawledData *crawled_data) {
-    if (count > 5) {
+    if (count > 10) {
         fprintf(stderr, "Max depth reached\n");
         return ERR_MAX_DEPTH;
     }
@@ -565,11 +579,9 @@ int fetch_url(char *url, SSL_CTX *ctx, int depth, int count, char **final_url, c
                 } else {
                     redirect_url = strdup(new_location);
                 }
-                //printf("Redirecting to: %s\n", redirect_url);
                 fetch_url(redirect_url, ctx, depth, count + 1, final_url, url_type, crawled_data);
                 free(redirect_url);
                 free(new_location);
-                return result;
             }
         }
     }
@@ -587,19 +599,17 @@ int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_dat
     char *final_url = NULL;
     char *url_type = NULL;
 
-    fetch_url(url, ctx, depth, count, &final_url, &url_type, crawled_data);
-
-    // if (final_url == NULL) {
-    //     sem_wait(sem);
-    //     for (int i = 0; i < crawled_data->crawled_count; i++) {
-    //         if (strcmp(crawled_data->crawled_urls[i], url) == 0) {
-    //             crawled_data->status[i] = 0; // 標記為未爬取
-    //             break;
-    //         }
-    //     }
-    //     sem_post(sem);
-    //     return ERR_FETCH_URL;
-    // }
+    int result = fetch_url(url, ctx, depth, count, &final_url, &url_type, crawled_data);
+    if (result == SUCCESS) {
+        sem_wait(sem);
+        for (int i = 0; i < crawled_data->crawled_count; i++) {
+            if (strcmp(crawled_data->crawled_urls[i], url) == 0) {
+                crawled_data->status[i] = 3;
+                break;
+            }
+        }
+        sem_post(sem);
+    }
 
     if (strcmp(url_type, "html") == 0 && depth < MAX_DEPTH) {
         char *read_filename = sanitize_filename(url);
@@ -632,68 +642,53 @@ int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_dat
         fread(response, 1, file_size, file);
         response[file_size] = '\0';
 
-        parse_html(response, url, crawled_data, sem);
-
-        printf("okokok\n");
-        sem_wait(sem);
-        for (int i = 0; i < crawled_data->crawled_count; i++) {
-            if (strcmp(crawled_data->crawled_urls[i], url) == 0) {
-                crawled_data->status[i] = 3;
-                break;
-            }
-        }
-        sem_post(sem);
-        printf("okokokkkk\n");
+        parse_html(response, depth, url, crawled_data, sem);
 
         free(response);
         fclose(file);
-        while(1) {
-            for (int i = 0; i < crawled_data->crawled_count; i++) {
-                if (crawled_data->status[i] == 1) {
-                    printf("okokokkkkoo\n");
-                    fetch_and_parse(crawled_data->crawled_urls[i], depth + 1, ctx, crawled_data, sem);
-                }
-            }
-        }
     }
-    printf("okokokkkkkkkkkkkkkkkkkkk\n");
+
     return SUCCESS;
 }
 
-
-
-int child_process(SSL_CTX *ctx, CrawledData *crawled_data, int id, sem_t *sem) {
+void child_process(SSL_CTX *ctx, CrawledData *crawled_data, int id, sem_t *sem) {
     while (1) {
         sem_wait(sem);
         char *url_to_crawl = NULL;
+        int depth;
+        int can_crawl = 0;
+        int all_crawled = 1;
         for (int i = 0; i < crawled_data->crawled_count; i++) {
+            if (crawled_data->status[i] != 3) {
+                all_crawled = 0;
+            }
+
             if (crawled_data->status[i] == 1) {
                 url_to_crawl = crawled_data->crawled_urls[i];
+                depth = crawled_data->depth[i];
                 crawled_data->status[i] = 2;
-                printf("Child %d processing URL: %s\n", id, url_to_crawl);
+                can_crawl = 1;
                 break;
             }
         }
         sem_post(sem);
 
-        if (url_to_crawl) {
+        if (all_crawled == 1) {
+            printf("Child %d: All URLS have been crawled.\n", id);
+            break;
+        }
+        
+        if (url_to_crawl && can_crawl == 1) {
             printf("Child %d processing URL: %s\n", id, url_to_crawl);
-            fetch_and_parse(url_to_crawl, 1, ctx, crawled_data, sem);
+            fetch_and_parse(url_to_crawl, depth, ctx, crawled_data, sem);
         } else {
-            sleep(10);
+            sleep(3);
         }
     }
     exit(0);
 }
 
-
-
 int main(int argc, char *argv[]) {
-
-    // Delete temp shared memory
-    sem_unlink(SEM_NAME);
-    shm_unlink(SHM_NAME);
-
     // Test url = "https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10335"
     // Test url = "https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10334"
     // Test url = "https://www.openfind.com.tw/taiwan/news_detail.php?news_id=10339"
@@ -707,39 +702,38 @@ int main(int argc, char *argv[]) {
     char *start_url = argv[1];
     output_dir = argv[2];
     
+    // Delete temp shared memory
+    sem_unlink(SEM_NAME);
+    shm_unlink(SHM_NAME);
+
     // Initialize shared memory for CrawledData
     int shm_fd = shm_open("/crawled_data", O_CREAT | O_RDWR, 0700);
     if (shm_fd == -1) {
         fprintf(stderr, "Failed to open shared memory: %s\n", strerror(errno));
-        return EXIT_FAILURE;
+        return ERR_OPEN_SHARED_MEMORY;
     }
 
     if (ftruncate(shm_fd, sizeof(CrawledData)) == -1) {
         fprintf(stderr, "Failed to resize shared memory: %s\n", strerror(errno));
         shm_unlink("/crawled_data");
-        return EXIT_FAILURE;
+        return ERR_RESIZE_SHARED_MEMORY;
     }
 
-    CrawledData *crawled_data = mmap(NULL, sizeof(CrawledData), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    crawled_data = mmap(NULL, sizeof(CrawledData), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
     if (crawled_data == MAP_FAILED) {
         fprintf(stderr, "Failed to map shared memory: %s\n", strerror(errno));
         shm_unlink("/crawled_data");
-        return EXIT_FAILURE;
+        return ERR_MAP_SHARED_MEMORY;
     }
     memset(crawled_data, 0, sizeof(CrawledData));
 
     // Create semaphore
-    sem_t *sem = sem_open("/crawled_data_sem", O_CREAT | O_EXCL, 0700, 1);
+    sem = sem_open("/crawled_data_sem", O_CREAT | O_EXCL, 0700, 1);
     if (sem == SEM_FAILED) {
-        if (errno == EEXIST) {
-            sem = sem_open("/crawled_data_sem", 0);
-        }
-        if (sem == SEM_FAILED) {
-            perror("sem_open");
-            munmap(crawled_data, sizeof(CrawledData));
-            shm_unlink("/crawled_data");
-            return EXIT_FAILURE;
-        }
+        fprintf(stderr, "Failed to open existing semaphore.\n");
+        munmap(crawled_data, sizeof(CrawledData));
+        shm_unlink("/crawled_data");
+        return ERR_SEM_OPEN;
     }
 
     SSL_CTX *ctx = create_ssl_context();
@@ -749,7 +743,7 @@ int main(int argc, char *argv[]) {
         sem_unlink("/crawled_data_sem");
         munmap(crawled_data, sizeof(CrawledData));
         shm_unlink("/crawled_data");
-        return EXIT_FAILURE;
+        return ERR_SSL_CONNECT;
     }
 
     if (create_directory(output_dir) != SUCCESS) {
@@ -764,8 +758,9 @@ int main(int argc, char *argv[]) {
 
     // Initialize the first URL
     sem_wait(sem);
-    crawled_data->crawled_urls[crawled_data->crawled_count] = strdup(start_url);
-    crawled_data->status[crawled_data->crawled_count] = 1; // can_crawl
+    strcpy(crawled_data->crawled_urls[crawled_data->crawled_count], start_url);
+    crawled_data->status[crawled_data->crawled_count] = 1;
+    crawled_data->depth[crawled_data->crawled_count] = 1;
     crawled_data->crawled_count++;
     sem_post(sem);
 
@@ -784,68 +779,44 @@ int main(int argc, char *argv[]) {
             SSL_CTX_free(ctx);
             sem_close(sem);
             sem_unlink("/crawled_data_sem");
-            munmap(crawled_data, sizeof(CrawledData));
             shm_unlink("/crawled_data");
+            munmap(crawled_data, sizeof(CrawledData));
             return ERR_CREATE_FORK;
         } else if (pids[i] == 0) {
             child_process(ctx, crawled_data, i + 1, sem);
-            exit(0);  // Ensure child processes exit after completion
         } else {
             active_children++;
         }
     }
 
-    // Parent process: monitor and control
-    while (active_children > 0 && crawled_data->crawled_count < MAX_URLS) {
+    while (active_children > 0) {
         sem_wait(sem);
         for (int i = 0; i < crawled_data->crawled_count; i++) {
             if (crawled_data->status[i] == 0) {
                 crawled_data->status[i] = 1;
-                printf("Parent marking URL as can_crawl: %s\n", crawled_data->crawled_urls[i]);
             }
         }
         sem_post(sem);
 
-        // Check if any child has terminated
         for (int i = 0; i < NUM_CHILDREN; i++) {
             int status;
             pid_t result = waitpid(pids[i], &status, WNOHANG);
             if (result == -1) {
-                perror("waitpid");
+                fprintf(stderr, "waitpid\n");
             } else if (result > 0) {
                 printf("Child process %d (PID: %d) has terminated.\n", i + 1, pids[i]);
                 active_children--;
             }
         }
-    }
-
-    // If we've reached MAX_URLS, signal remaining children to terminate
-    if (crawled_data->crawled_count >= MAX_URLS) {
-        for (int i = 0; i < NUM_CHILDREN; i++) {
-            kill(pids[i], SIGTERM);
-        }
-    }
-
-    // Wait for any remaining children to finish
-    while (active_children > 0) {
-        int status;
-        pid_t result = wait(&status);
-        if (result > 0) {
-            active_children--;
-            printf("Child process (PID: %d) has terminated.\n", result);
-        }
+        sleep(2);
     }
 
     // Clean up
     SSL_CTX_free(ctx);
     sem_close(sem);
     sem_unlink("/crawled_data_sem");
-    for (int i = 0; i < crawled_data->crawled_count; i++) {
-        free(crawled_data->crawled_urls[i]);
-    }
     munmap(crawled_data, sizeof(CrawledData));
     shm_unlink("/crawled_data");
     EVP_cleanup();
-    printf("ok\n");
     return SUCCESS;
 }
