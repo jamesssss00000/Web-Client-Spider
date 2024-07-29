@@ -17,31 +17,6 @@
 #include <fcntl.h>
 #include <semaphore.h>
 
-// #define SUCCESS  0
-// #define ERR_BASE 0
-// #define ALL_CRAWLED 1
-// #define ERR_READ_WEB        ERR_BASE-1
-// #define ERR_ALREADY_CRAWLED ERR_BASE-2
-// #define ERR_CREATE_DIR      ERR_BASE-3
-// #define ERR_GETADDRIFO      ERR_BASE-4
-// #define ERR_SOCKET          ERR_BASE-5
-// #define ERR_CONNECT         ERR_BASE-6
-// #define ERR_OF_ARGS         ERR_BASE-7
-// #define ERR_OUT_OF_MEM      ERR_BASE-8
-// #define ERR_FETCH_URL       ERR_BASE-9
-// #define ERR_OPEN_FILE       ERR_BASE-10
-// #define ERR_FIND_HEAD       ERR_BASE-11
-// #define ERR_FILE_TYPE       ERR_BASE-12
-// #define ERR_HTTP_STATUS     ERR_BASE-13
-// #define ERR_READ_RESPONSE   ERR_BASE-14
-// #define ERR_MAX_DEPTH       ERR_BASE-15
-// #define ERR_SSL_CONNECT     ERR_BASE-16
-// #define ERR_MAX_URLS        ERR_BASE-17
-// #define ERR_CRAWLING        ERR_BASE-18
-// #define ERR_SEM_OPEN        ERR_BASE-19
-// #define ERR_CREATE_FORK     ERR_BASE-20
-// #define ERR_URL_TOO_LONG    ERR_BASE-21
-
 #define SUCCESS  0
 #define ERR_BASE 0
 #define ERR_URL_TOO_LONG            ERR_BASE-1
