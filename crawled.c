@@ -587,7 +587,7 @@ int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_dat
     }
 
     if (strcmp(url_type, "html") == 0 && depth < MAX_DEPTH) {
-        char *read_filename = sanitize_filename(url);
+        char *read_filename = sanitize_filename(final_url);
         if (read_filename == NULL) {
             fprintf(stderr, "Filename sanitization failed\n");
             return ERR_OUT_OF_MEM;
@@ -617,7 +617,7 @@ int fetch_and_parse(char *url, int depth, SSL_CTX *ctx, CrawledData *crawled_dat
         fread(response, 1, file_size, file);
         response[file_size] = '\0';
 
-        parse_html(response, depth, url, crawled_data, sem);
+        parse_html(response, depth, final_url, crawled_data, sem);
 
         free(response);
         fclose(file);
